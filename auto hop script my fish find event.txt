@@ -1,10 +1,10 @@
 --=====================================================
--- PREVENT DOUBLE LOAD
+-- AUTO EXEC + PREVENT DOUBLE LOAD
 --=====================================================
 if getgenv().AUTO_HOP_LOADED then return end
 getgenv().AUTO_HOP_LOADED = true
 getgenv().PING_SENT = false
-getgenv().VisitedServers = {}
+getgenv().VisitedServers = getgenv().VisitedServers or {}
 
 --=====================================================
 -- SERVICES
@@ -26,17 +26,27 @@ assert(http, "Executor does not support HTTP")
 --=====================================================
 -- CONFIG
 --=====================================================
-local WEBHOOK_URL = "https://discord.com/api/webhooks/1464990675102863625/rmqr_x5v2vYB7GuAJ9WMk_4qkex3VQLbZPxfglMDFzQlUEV59kaVbwikVG3-rduD-031"
+local WEBHOOK_URL = "PUT_YOUR_WEBHOOK_HERE"
 local HOP_INTERVAL = 10
 local ALERT_SECONDS = 60
 local MIN_PLAYERS = 1
 local MAX_PLAYERS = 7
 
 --=====================================================
+-- AUTO RELOAD AFTER TELEPORT (INF YIELD STYLE)
+--=====================================================
+if queue_on_teleport then
+	queue_on_teleport([[
+		getgenv().AUTO_HOP_LOADED = false
+		loadstring(game:HttpGet(game:GetService("HttpService"):UrlEncode("SCRIPT_URL_HERE")))()
+	]])
+end
+
+--=====================================================
 -- ROBLOX JOIN LINK
 --=====================================================
-local function robloxJoinLink()
-	return "roblox://placeId=" .. PLACE_ID .. "&gameInstanceId=" .. JOB_ID
+local function robloxJoinLink(jobId)
+	return "roblox://placeId=" .. PLACE_ID .. "&gameInstanceId=" .. jobId
 end
 
 --=====================================================
@@ -61,17 +71,14 @@ end
 --=====================================================
 local function scanBoard()
 	local now = os.time()
-	local weather = {}
-	local countdown = {}
+	local weather, countdown = {}, {}
 
 	for _, v in ipairs(workspace.CoreObjects.WeatherEventCountdown.Board:GetDescendants()) do
 		if v:IsA("TextLabel") then
 			table.insert(weather, "`" .. v.Text .. "`")
-
 			local sec = parseTime(v.Text)
 			if sec then
-				table.insert(
-					countdown,
+				table.insert(countdown,
 					"`" .. v.Text .. "` → <t:" .. (now + sec) .. ":R>"
 				)
 			end
@@ -92,16 +99,16 @@ local function sendMainWebhook()
 	local weather, countdown = scanBoard()
 
 	http({
-		Url = WEBHOOK_URL,
+		Url = "https://discord.com/api/webhooks/1464990675102863625/rmqr_x5v2vYB7GuAJ9WMk_4qkex3VQLbZPxfglMDFzQlUEV59kaVbwikVG3-rduD-031",
 		Method = "POST",
-		Headers = { ["Content-Type"] = "application/json" },
+		Headers = {["Content-Type"] = "application/json"},
 		Body = HttpService:JSONEncode({
 			embeds = {{
 				title = "🌍 Roblox Server Info",
 				color = 0x4FC3F7,
 				fields = {
 					{ name = "👥 Players", value = playerCount(), inline = true },
-					{ name = "🆔 JobId", value = "`" .. JOB_ID .. "`", inline = false },
+					{ name = "🆔 JobId", value = "`"..JOB_ID.."`", inline = false },
 					{ name = "🌦 Weather Board", value = table.concat(weather, "\n"), inline = false },
 					{ name = "⏳ Countdown", value = table.concat(countdown, "\n"), inline = false }
 				},
@@ -114,37 +121,24 @@ end
 sendMainWebhook()
 
 --=====================================================
--- DISCORD PING (WITH BUTTON)
+-- DISCORD PING (ONCE)
 --=====================================================
-local function sendPing(sourceText, secondsLeft)
+local function sendPing(text, sec)
 	if getgenv().PING_SENT then return end
 	getgenv().PING_SENT = true
 
 	http({
 		Url = WEBHOOK_URL,
 		Method = "POST",
-		Headers = { ["Content-Type"] = "application/json" },
+		Headers = {["Content-Type"] = "application/json"},
 		Body = HttpService:JSONEncode({
-			content = "@here ⏰ **Event is about to start!**",
+			content = "@here ⏰ **Event starting soon!**",
 			embeds = {{
 				title = "⏳ Countdown Alert",
 				color = 0xFF5252,
 				fields = {
-					{
-						name = "Source (from board)",
-						value = "`" .. sourceText .. "`",
-						inline = false
-					},
-					{
-						name = "Time Left",
-						value = secondsLeft .. " seconds",
-						inline = true
-					},
-					{
-						name = "JobId",
-						value = "`" .. JOB_ID .. "`",
-						inline = false
-					}
+					{ name = "From Board", value = "`"..text.."`", inline = false },
+					{ name = "Time Left", value = sec.." seconds", inline = true }
 				},
 				timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
 			}},
@@ -154,7 +148,7 @@ local function sendPing(sourceText, secondsLeft)
 					type = 2,
 					style = 5,
 					label = "🚀 Join Server",
-					url = robloxJoinLink()
+					url = robloxJoinLink(JOB_ID)
 				}}
 			}}
 		})
@@ -162,11 +156,10 @@ local function sendPing(sourceText, secondsLeft)
 end
 
 --=====================================================
--- COUNTDOWN WATCH LOOP
+-- COUNTDOWN WATCH
 --=====================================================
 task.spawn(function()
-	while true do
-		task.wait(1)
+	while task.wait(1) do
 		for _, v in ipairs(workspace.CoreObjects.WeatherEventCountdown.Board:GetDescendants()) do
 			if v:IsA("TextLabel") then
 				local sec = parseTime(v.Text)
@@ -179,33 +172,23 @@ task.spawn(function()
 end)
 
 --=====================================================
--- SAFE SERVER HOP (1–7 PLAYERS, NO DUPLICATE)
+-- SERVER HOP (1–7 PLAYERS, NO DUPLICATE)
 --=====================================================
 local function hopServer()
-	local url =
-		"https://games.roblox.com/v1/games/"
-		.. PLACE_ID .. "/servers/Public?limit=100"
-
+	local url = "https://games.roblox.com/v1/games/"..PLACE_ID.."/servers/Public?limit=100"
 	local ok, data = pcall(function()
 		return HttpService:JSONDecode(game:HttpGet(url))
 	end)
-
-	if not ok or not data or not data.data then return end
+	if not ok or not data then return end
 
 	for _, s in ipairs(data.data) do
 		if s.id ~= JOB_ID
-			and not getgenv().VisitedServers[s.id]
-			and s.playing >= MIN_PLAYERS
-			and s.playing <= MAX_PLAYERS
-		then
-			getgenv().VisitedServers[s.id] = true
-			warn("[AUTO-HOP] ->", s.id, "Players:", s.playing)
+		and not getgenv().VisitedServers[s.id]
+		and s.playing >= MIN_PLAYERS
+		and s.playing <= MAX_PLAYERS then
 
-			TeleportService:TeleportToPlaceInstance(
-				PLACE_ID,
-				s.id,
-				LP
-			)
+			getgenv().VisitedServers[s.id] = true
+			TeleportService:TeleportToPlaceInstance(PLACE_ID, s.id, LP)
 			return
 		end
 	end
@@ -215,8 +198,7 @@ end
 -- AUTO HOP LOOP (FOREVER)
 --=====================================================
 task.spawn(function()
-	while true do
-		task.wait(HOP_INTERVAL)
+	while task.wait(HOP_INTERVAL) do
 		hopServer()
 	end
 end)
