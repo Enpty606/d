@@ -1,0 +1,222 @@
+--=====================================================
+-- PREVENT DOUBLE LOAD
+--=====================================================
+if getgenv().AUTO_HOP_LOADED then return end
+getgenv().AUTO_HOP_LOADED = true
+getgenv().PING_SENT = false
+getgenv().VisitedServers = {}
+
+--=====================================================
+-- SERVICES
+--=====================================================
+local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+
+local LP = Players.LocalPlayer
+local PLACE_ID = game.PlaceId
+local JOB_ID = game.JobId
+
+--=====================================================
+-- EXECUTOR HTTP
+--=====================================================
+local http = syn and syn.request or http_request or request
+assert(http, "Executor does not support HTTP")
+
+--=====================================================
+-- CONFIG
+--=====================================================
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1464990675102863625/rmqr_x5v2vYB7GuAJ9WMk_4qkex3VQLbZPxfglMDFzQlUEV59kaVbwikVG3-rduD-031"
+local HOP_INTERVAL = 10
+local ALERT_SECONDS = 60
+local MIN_PLAYERS = 1
+local MAX_PLAYERS = 7
+
+--=====================================================
+-- ROBLOX JOIN LINK
+--=====================================================
+local function robloxJoinLink()
+	return "roblox://placeId=" .. PLACE_ID .. "&gameInstanceId=" .. JOB_ID
+end
+
+--=====================================================
+-- TIME PARSER (MM:SS)
+--=====================================================
+local function parseTime(text)
+	local m, s = text:match("(%d+):(%d+)")
+	if m and s then
+		return tonumber(m) * 60 + tonumber(s)
+	end
+end
+
+--=====================================================
+-- PLAYER COUNT
+--=====================================================
+local function playerCount()
+	return #Players:GetPlayers() .. " / " .. Players.MaxPlayers
+end
+
+--=====================================================
+-- SCAN WEATHER BOARD
+--=====================================================
+local function scanBoard()
+	local now = os.time()
+	local weather = {}
+	local countdown = {}
+
+	for _, v in ipairs(workspace.CoreObjects.WeatherEventCountdown.Board:GetDescendants()) do
+		if v:IsA("TextLabel") then
+			table.insert(weather, "`" .. v.Text .. "`")
+
+			local sec = parseTime(v.Text)
+			if sec then
+				table.insert(
+					countdown,
+					"`" .. v.Text .. "` → <t:" .. (now + sec) .. ":R>"
+				)
+			end
+		end
+	end
+
+	if #weather == 0 then
+		table.insert(weather, "`No Weather Data`")
+	end
+
+	return weather, countdown
+end
+
+--=====================================================
+-- SEND MAIN WEBHOOK
+--=====================================================
+local function sendMainWebhook()
+	local weather, countdown = scanBoard()
+
+	http({
+		Url = WEBHOOK_URL,
+		Method = "POST",
+		Headers = { ["Content-Type"] = "application/json" },
+		Body = HttpService:JSONEncode({
+			embeds = {{
+				title = "🌍 Roblox Server Info",
+				color = 0x4FC3F7,
+				fields = {
+					{ name = "👥 Players", value = playerCount(), inline = true },
+					{ name = "🆔 JobId", value = "`" .. JOB_ID .. "`", inline = false },
+					{ name = "🌦 Weather Board", value = table.concat(weather, "\n"), inline = false },
+					{ name = "⏳ Countdown", value = table.concat(countdown, "\n"), inline = false }
+				},
+				timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+			}}
+		})
+	})
+end
+
+sendMainWebhook()
+
+--=====================================================
+-- DISCORD PING (WITH BUTTON)
+--=====================================================
+local function sendPing(sourceText, secondsLeft)
+	if getgenv().PING_SENT then return end
+	getgenv().PING_SENT = true
+
+	http({
+		Url = WEBHOOK_URL,
+		Method = "POST",
+		Headers = { ["Content-Type"] = "application/json" },
+		Body = HttpService:JSONEncode({
+			content = "@here ⏰ **Event is about to start!**",
+			embeds = {{
+				title = "⏳ Countdown Alert",
+				color = 0xFF5252,
+				fields = {
+					{
+						name = "Source (from board)",
+						value = "`" .. sourceText .. "`",
+						inline = false
+					},
+					{
+						name = "Time Left",
+						value = secondsLeft .. " seconds",
+						inline = true
+					},
+					{
+						name = "JobId",
+						value = "`" .. JOB_ID .. "`",
+						inline = false
+					}
+				},
+				timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+			}},
+			components = {{
+				type = 1,
+				components = {{
+					type = 2,
+					style = 5,
+					label = "🚀 Join Server",
+					url = robloxJoinLink()
+				}}
+			}}
+		})
+	})
+end
+
+--=====================================================
+-- COUNTDOWN WATCH LOOP
+--=====================================================
+task.spawn(function()
+	while true do
+		task.wait(1)
+		for _, v in ipairs(workspace.CoreObjects.WeatherEventCountdown.Board:GetDescendants()) do
+			if v:IsA("TextLabel") then
+				local sec = parseTime(v.Text)
+				if sec and sec <= ALERT_SECONDS then
+					sendPing(v.Text, sec)
+				end
+			end
+		end
+	end
+end)
+
+--=====================================================
+-- SAFE SERVER HOP (1–7 PLAYERS, NO DUPLICATE)
+--=====================================================
+local function hopServer()
+	local url =
+		"https://games.roblox.com/v1/games/"
+		.. PLACE_ID .. "/servers/Public?limit=100"
+
+	local ok, data = pcall(function()
+		return HttpService:JSONDecode(game:HttpGet(url))
+	end)
+
+	if not ok or not data or not data.data then return end
+
+	for _, s in ipairs(data.data) do
+		if s.id ~= JOB_ID
+			and not getgenv().VisitedServers[s.id]
+			and s.playing >= MIN_PLAYERS
+			and s.playing <= MAX_PLAYERS
+		then
+			getgenv().VisitedServers[s.id] = true
+			warn("[AUTO-HOP] ->", s.id, "Players:", s.playing)
+
+			TeleportService:TeleportToPlaceInstance(
+				PLACE_ID,
+				s.id,
+				LP
+			)
+			return
+		end
+	end
+end
+
+--=====================================================
+-- AUTO HOP LOOP (FOREVER)
+--=====================================================
+task.spawn(function()
+	while true do
+		task.wait(HOP_INTERVAL)
+		hopServer()
+	end
+end)
