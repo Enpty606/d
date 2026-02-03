@@ -38,7 +38,7 @@ local MAX_PLAYERS = 7
 if queue_on_teleport then
 	queue_on_teleport([[
 		getgenv().AUTO_HOP_LOADED = false
-		loadstring(game:HttpGet(game:GetService("HttpService"):UrlEncode("SCRIPT_URL_HERE")))()
+		loadstring(game:HttpGet(game:GetService("HttpService"):UrlEncode("https://github.com/Enpty606/d/blob/main/auto%20hop%20script%20my%20fish%20find%20event.txt")))()
 	]])
 end
 
